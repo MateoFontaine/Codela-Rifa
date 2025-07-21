@@ -68,19 +68,35 @@ export async function getNumbersByUser(userId: number) {
 }
 
 export async function purchaseNumbers(numbers: number[], userId: number) {
-  const { data, error } = await supabase
-    .from("raffle_numbers")
-    .update({
-      status: "sold",
-      user_id: userId,
-      purchased_at: new Date().toISOString(),
-    })
-    .in("number", numbers)
-    .eq("status", "available")
-    .select()
+  try {
+    const versionPromises = numbers.map(num => 
+      supabase
+        .from('raffle_numbers')
+        .select('version')
+        .eq('number', num)
+        .single()
+    );
+    
+    const versions = await Promise.all(versionPromises);
+    
+    const reservePromises = numbers.map((num, index) => 
+      supabase.rpc('reserve_number', {
+        p_number: num,
+        p_user_id: userId,
+        p_current_version: versions[index].data?.version
+      })
+    );
 
-  if (error) throw error
-  return data
+    const results = await Promise.all(reservePromises);
+    
+    const errors = results.filter(r => r.error);
+    if (errors.length > 0) throw errors[0].error;
+    
+    return results.map(r => r.data);
+
+  } catch (error: any) {
+    throw new Error(`Error reserving numbers: ${error.message}`);
+  }
 }
 
 export async function searchNumber(number: number) {

@@ -136,9 +136,6 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
                       • <strong>Números totales:</strong> {RAFFLE_CONFIG.TOTAL_NUMBERS.toLocaleString()}
                     </li>
                     <li>
-                      • <strong>Transmisión:</strong> En vivo
-                    </li>
-                    <li>
                       • <strong>Entrega:</strong> Inmediata
                     </li>
                   </ul>
@@ -299,11 +296,7 @@ export default function LandingPage({ onLoginSuccess }: LandingPageProps) {
               <Star className="w-5 h-5 mr-2" />
               Comenzar Ahora
             </Button>
-            <WhatsAppButton
-              variant="small"
-              message="Hola! Quiero participar en la Rifa Digital 2025"
-              className="bg-green-500 border-green-500 text-white hover:bg-green-600"
-            />
+          
           </div>
         </div>
       </div>

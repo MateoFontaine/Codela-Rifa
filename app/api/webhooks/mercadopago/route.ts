@@ -2,6 +2,14 @@ import { type NextRequest, NextResponse } from "next/server"
 import { supabase } from "../../../../lib/supabase"
 import { getServerMPConfig } from "../../../../lib/mercadopago"
 
+function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+  // Convert Buffer to ArrayBuffer safely
+  const arrayBuffer = new ArrayBuffer(buffer.length);
+  const view = new Uint8Array(arrayBuffer);
+  buffer.copy(view, 0);
+  return arrayBuffer;
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log("🔔 Webhook received from MercadoPago")
@@ -17,11 +25,39 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     console.log("📋 Webhook body:", body)
 
-    // NO validar signature por ahora para evitar el 401
-    // La validación de signature puede causar problemas si no está configurada correctamente
+    // Validar firma de MercadoPago
+    const signature = request.headers.get('x-signature')
+    const bodyText = await request.text()
+    
+    if (!signature || !mpConfig.WEBHOOK_SECRET) {
+      console.error("❌ Missing signature or webhook secret")
+      return NextResponse.json({ error: "Configuration error" }, { status: 500 })
+    }
 
-    // Verificar que es una notificación de pago
-    if (body.type !== "payment" && body.action !== "payment.updated") {
+    // Generar HMAC SHA-256
+    const encoder = new TextEncoder()
+    const secretKey = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(mpConfig.WEBHOOK_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    )
+    
+    const isValid = await crypto.subtle.verify(
+      "HMAC",
+      secretKey,
+      bufferToArrayBuffer(Buffer.from(signature, "base64")),
+      encoder.encode(bodyText)
+    )
+
+    if (!isValid) {
+      console.error("❌ Invalid signature")
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    // Verificar que es una notificación de pago válida
+    if (body.type !== "payment" || body.action !== "payment.updated") {
       console.log("ℹ️ Not a payment notification, ignoring")
       return NextResponse.json({ status: "ignored" })
     }
@@ -34,17 +70,27 @@ export async function POST(request: NextRequest) {
 
     console.log("💳 Processing payment ID:", paymentId)
 
-    // Obtener detalles del pago desde MercadoPago
-    const paymentResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-      headers: {
-        Authorization: `Bearer ${mpConfig.ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    })
+    // Obtener detalles del pago desde MercadoPago con reintentos
+    let paymentResponse: Response | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      paymentResponse = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: {
+          Authorization: `Bearer ${mpConfig.ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      });
+      
+      if (paymentResponse.status !== 429) break;
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+    }
 
-    if (!paymentResponse.ok) {
-      console.error("❌ Failed to fetch payment details:", paymentResponse.status)
-      return NextResponse.json({ error: "Failed to fetch payment" }, { status: 400 })
+    if (!paymentResponse?.ok) {
+      const errorStatus = paymentResponse?.status || 500;
+      console.error("❌ Failed to fetch payment details after 3 attempts:", errorStatus);
+      return NextResponse.json(
+        { error: errorStatus === 429 ? "Rate limit exceeded" : "Failed to fetch payment" }, 
+        { status: errorStatus > 400 ? errorStatus : 400 }
+      );
     }
 
     const paymentData = await paymentResponse.json()
